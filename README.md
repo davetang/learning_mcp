@@ -22,7 +22,7 @@ This repository is for learning about the Model Context Protocol (MCP). MCP is a
 * [The architecture of MCP (clients, servers, transports, and message formats).](#the-architecture-of-mcp)
 * [How MCP compares to other approaches for tool use and function calling.](#how-mcp-compares-to-other-approaches)
 * [How to build and run an MCP server.](#how-to-build-and-run-an-mcp-server)
-* How to connect an MCP server to an LLM client (e.g. Claude Desktop, Claude Code).
+* [How to connect an MCP server to an LLM client (e.g. Claude Desktop, Claude Code).](#how-to-connect-an-mcp-server-to-an-llm-client)
 * Practical examples of using MCP to expose tools, resources, and prompts.
 
 ## What problem does MCP solve?
@@ -232,3 +232,81 @@ This launches your server, connects to it, and opens a browser UI where you can:
 * Watch the raw JSON-RPC messages going back and forth, which is invaluable when learning.
 
 Once the Inspector shows your server working as expected, the next step is to connect it to an actual host so that an LLM can drive it. That is covered in the next section.
+
+## How to connect an MCP server to an LLM client
+
+Building a server is only half the picture. To actually use it, a host (an LLM application) needs to launch it, connect to it, and surface its tools to the model. Each host has its own configuration mechanism, but they all do the same three things:
+
+1. Give the server a name (used internally to identify it).
+2. Specify how to start it (a command and arguments, for a local server) or where to reach it (a URL, for a remote server).
+3. Optionally set a scope: just this project, all your projects, or shared with teammates.
+
+The example below uses **Claude Code** as the host, continuing with the `orders-db` server from the previous section.
+
+### Adding a server with `claude mcp add`
+
+The simplest way to register a local stdio server with Claude Code is the `claude mcp add` command:
+
+```bash
+claude mcp add orders-db -- python /path/to/server.py
+```
+
+Breakdown:
+
+* `orders-db` is the name Claude Code will use to identify the server.
+* Everything after `--` is the command line Claude Code will run to launch it. The server is started as a subprocess and communicates over stdio.
+
+By default this registers the server at the **local** scope (just this project on this machine). To make the same server available across all your projects, use `-s user`:
+
+```bash
+claude mcp add -s user orders-db -- python /path/to/server.py
+```
+
+To share it with teammates working on the same repository, use `-s project`. That writes the configuration into a `.mcp.json` file at the root of the project, which you can commit to git so that everyone working on the project picks it up automatically.
+
+### Verifying the connection
+
+After adding a server, you can inspect what's configured from the shell:
+
+```bash
+claude mcp list           # all configured servers
+claude mcp get orders-db  # details of one server
+```
+
+Inside a Claude Code session, the `/mcp` slash command shows which servers are currently connected, whether each is healthy, and which tools, resources, and prompts each one exposes. This is the quickest way to confirm that the LLM can actually see your tools.
+
+### What the configuration file looks like
+
+Under the hood, `claude mcp add` writes to a JSON configuration file. The format is shared across most MCP-aware hosts and looks like this:
+
+```json
+{
+  "mcpServers": {
+    "orders-db": {
+      "command": "python",
+      "args": ["/path/to/server.py"],
+      "env": {
+        "DATABASE_URL": "postgres://localhost/orders"
+      }
+    }
+  }
+}
+```
+
+You can also edit this file by hand instead of using the command. The `env` block is useful for passing secrets or configuration (database URLs, API keys) to your server without baking them into the code.
+
+### Connecting to a remote (HTTP) server
+
+If your server runs as a network service rather than a local subprocess, use the HTTP transport instead:
+
+```bash
+claude mcp add --transport http remote-search https://mcp.example.com/v1
+```
+
+Claude Code will open a Streamable HTTP connection to that URL rather than launching a subprocess.
+
+### Using the tools
+
+Once a server is connected, no further wiring is required on your end. The host fetches the tool list from the server, presents the tools to the LLM as part of the conversation, and the LLM decides when to call them. If you ask Claude "what was Acme's most recent order?", it will see that `orders-db` exposes `search_customers` and `get_order`, chain them as needed, and weave the results into its reply.
+
+In other words, the connection step is mostly a one-time setup: register the server, confirm it's healthy, and from that point on the model treats its tools as just another capability it can reach for when it needs them.
