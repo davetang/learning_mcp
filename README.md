@@ -54,6 +54,30 @@ MCP follows a client/server architecture, but with a small twist: the "client" i
 
 This separation matters: the host owns the LLM and the user experience, while servers own the integration with the outside world. They meet in the middle through a standard protocol.
 
+Visually:
+
+```
+   +------------------------------------------+
+   |        Host  (e.g. Claude Code)          |
+   |                                          |
+   |    [Client]    [Client]    [Client]      |
+   +--------|-----------|-----------|---------+
+            |           |           |
+            |     JSON-RPC over stdio or HTTP
+            v           v           v
+        +--------+  +--------+  +--------+
+        | Server |  | Server |  | Server |
+        | orders |  | github |  | files  |
+        +---|----+  +---|----+  +---|----+
+            |           |           |
+            v           v           v
+        +--------+  +--------+  +--------+
+        |Database|  | GitHub |  |  Disk  |
+        +--------+  +--------+  +--------+
+```
+
+The host is the only thing the user interacts with directly. Each client inside it talks to exactly one server, and each server is responsible for whatever external system sits behind it.
+
 ### Primitives a server can expose
 
 An MCP server exposes its functionality through a small set of well-defined primitives. The three core ones are:
@@ -62,7 +86,23 @@ An MCP server exposes its functionality through a small set of well-defined prim
 * **Resources.** Read-only, file-like pieces of context (documents, database rows, log files, configuration) that the server can offer to the host. Resources are typically "application-controlled": the host or user decides which ones to load into context.
 * **Prompts.** Reusable prompt templates or workflows that a server can offer. Prompts are typically "user-controlled": the user explicitly invokes them (for example, by picking one from a menu).
 
-There are also some additional primitives, such as **sampling** (a server can ask the host to run an LLM completion on its behalf), **roots** (the host can tell a server which directories or URIs it is allowed to operate within), and **elicitation** (a server can ask the user for additional input mid-operation).
+### Beyond the three core primitives
+
+Three further capabilities are worth knowing about, even if you do not use them on day one. They tend to come up once you build something more sophisticated than a plain set of tools.
+
+**Sampling.** Normally the host calls the server (to invoke a tool or read a resource). Sampling inverts that direction: the *server* asks the host to run an LLM completion on its behalf. This lets a server use the language model as part of its own processing, without having to bring its own API key or model.
+
+For example, a server could expose a `summarise_paper` tool that, when called, asks the host to run a summarisation prompt over the paper's abstract and returns the result. The server gets language-model power without needing direct access to one. Because the host is in charge of the actual model call, it can refuse the request, modify the prompt or parameters, ask the user to approve, and bill any usage against the user's account. That gating is what keeps the inversion safe.
+
+**Roots.** Roots are how the host tells a server which directories or URIs it is allowed to operate within. For instance, the host might pass `file:///home/user/projects/orders-db` as a root, signalling "this is the area you should care about; do not wander outside it." A filesystem server uses roots to scope its operations to the current project; a Git server uses them to know which repository to act on.
+
+Roots are advertised by the host rather than the server, and they can change during a session as the user opens or closes projects.
+
+**Elicitation.** Elicitation lets a server ask the user a question mid-operation. This is different from a tool call: it is a direct request for human input, with a small schema describing the answer the server expects.
+
+For example, before performing a destructive action a server might elicit "are you sure you want to delete table `orders`?", or it might elicit a missing piece of configuration ("what is your time zone?"). The host renders the question to the user in a consistent way and returns the answer to the server.
+
+The reason these exist as protocol-level features rather than ad-hoc patterns is so that the host can apply consistent UI, consent, and safety treatment to them. The user sees the same kind of prompt regardless of which server is asking.
 
 ### Transports
 
