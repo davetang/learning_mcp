@@ -21,7 +21,7 @@ This repository is for learning about the Model Context Protocol (MCP). MCP is a
 * [What problem MCP is designed to solve and why it exists.](#what-problem-does-mcp-solve)
 * [The architecture of MCP (clients, servers, transports, and message formats).](#the-architecture-of-mcp)
 * [How MCP compares to other approaches for tool use and function calling.](#how-mcp-compares-to-other-approaches)
-* How to build and run an MCP server.
+* [How to build and run an MCP server.](#how-to-build-and-run-an-mcp-server)
 * How to connect an MCP server to an LLM client (e.g. Claude Desktop, Claude Code).
 * Practical examples of using MCP to expose tools, resources, and prompts.
 
@@ -105,7 +105,7 @@ The limitations are that they are tied to a single vendor and a single product s
 
 ### Agent frameworks and tool libraries
 
-Libraries such as LangChain, LlamaIndex, Haystack, and various agent frameworks provide pre-built "tools" or "connectors" for common systems (databases, search engines, web APIs, file stores). These are very useful, but they operate at the SDK level: the integration code runs inside the host process, and is specific to the framework's abstractions and to the programming language it is written in.
+Libraries such as LangChain, LlamaIndex, Haystack, and various agent frameworks provide pre-built "tools" or "connectors" for common systems (databases, search engines, web APIs, file stores). These are very useful, but they operate at the library level: the integration code runs inside the host process, and is specific to the framework's abstractions and to the programming language it is written in.
 
 MCP is at the protocol level instead of the library level. Because the server runs as a separate process and communicates over JSON-RPC, it can be implemented in any language and consumed by any client, regardless of what language or framework the host is written in. You can write an MCP server in Python and use it from a TypeScript host, or vice versa, without sharing any code.
 
@@ -128,3 +128,107 @@ MCP can be thought of as a shared convention that absorbs the repetitive parts o
 The short version: MCP does not compete with the model's tool-use API; it standardises and externalises the layer where tools and data sources are defined, so that the same integration can be reused everywhere instead of being rebuilt in every application.
 
 A useful analogy is the Language Server Protocol (LSP). Before LSP, every code editor implemented its own integration for every programming language, leading to massive duplication of effort. LSP standardised the interface between editors and language tooling, so that one language server could serve any LSP-compatible editor. MCP aims to do the same for LLM applications and the tools and data they need to reach.
+
+## How to build and run an MCP server
+
+In practice, building an MCP server means three things:
+
+1. Pick a Software Development Kit (SDK) in your preferred language.
+2. Write your tools (and optionally resources and prompts) as ordinary functions.
+3. Run the server, either over stdio (for local use) or over HTTP (for remote use).
+
+A **Software Development Kit (SDK)** is just a packaged set of code (a library) that someone has written so you don't have to start from zero. In this case, the MCP SDK takes care of all the low-level protocol details (the JSON-RPC messages, the initialise handshake, schema generation, transport handling) so you can focus on writing the actual functions you want the LLM to call. You install it the same way you install any other library in your language (for example, `pip install` for Python or `npm install` for TypeScript).
+
+The protocol can be implemented from scratch on top of JSON-RPC 2.0, but in practice almost everyone uses an official SDK. Anthropic maintains SDKs in several languages; the most mature are **Python** and **TypeScript**, with **Java**, **C#**, **Kotlin**, **Swift**, and others available too.
+
+### A minimal server in Python
+
+The Python SDK ships a high-level `FastMCP` helper that handles most of the boilerplate. You describe each tool by writing a normal Python function with type hints and a docstring; the SDK turns those into the name, description, and JSON Schema that MCP expects.
+
+Install it:
+
+```bash
+pip install mcp
+```
+
+A minimal server that exposes two database query functions might look like this:
+
+```python
+# server.py
+from mcp.server.fastmcp import FastMCP
+
+mcp = FastMCP("orders-db")
+
+@mcp.tool()
+def search_customers(name: str) -> list[dict]:
+    """Search for customers whose name contains the given string."""
+    # ... run your query against the database ...
+    return [{"id": 1, "name": "Acme Corp"}]
+
+@mcp.tool()
+def get_order(order_id: int) -> dict:
+    """Fetch a single order by its numeric ID."""
+    # ... run your query against the database ...
+    return {"id": order_id, "total": 199.99, "status": "shipped"}
+
+if __name__ == "__main__":
+    mcp.run()  # defaults to stdio transport
+```
+
+Key points:
+
+* The function name becomes the tool name (`search_customers`, `get_order`).
+* The docstring becomes the description that the LLM sees.
+* The type hints (`name: str`, `order_id: int`) are turned into the JSON Schema for arguments.
+* The return value is serialised to JSON and sent back as the tool result.
+
+That is the whole server. The functions inside can do whatever you want: query a database, hit a REST API, read files, run a shell command, and so on.
+
+### A minimal server in TypeScript
+
+The equivalent in TypeScript using `@modelcontextprotocol/sdk` looks like:
+
+```typescript
+// server.ts
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { z } from "zod";
+
+const server = new McpServer({ name: "orders-db", version: "0.1.0" });
+
+server.tool(
+  "search_customers",
+  "Search for customers whose name contains the given string.",
+  { name: z.string() },
+  async ({ name }) => ({
+    content: [{ type: "text", text: JSON.stringify([{ id: 1, name: "Acme Corp" }]) }],
+  }),
+);
+
+await server.connect(new StdioServerTransport());
+```
+
+Same shape, same primitives, just expressed in the host language's idioms.
+
+### Running it
+
+For local development, the stdio transport is the default. The server is launched as a subprocess by whatever host you connect, so you typically do not run it directly yourself. The host is configured with a command line like `python server.py` or `node server.js`, and it manages the process lifecycle.
+
+If you want to run a server over the network (for example, a shared internal MCP server), you switch the transport to Streamable HTTP. With the Python SDK, that looks roughly like `mcp.run(transport="streamable-http", port=8080)`.
+
+### Testing your server
+
+You don't need to plug a server into Claude Desktop or Claude Code to try it out. The community provides the **MCP Inspector**, a small web UI that connects to any MCP server, lists its tools/resources/prompts, and lets you invoke them by hand. It is the fastest way to verify that your server is behaving correctly before wiring it into an LLM.
+
+```bash
+npx @modelcontextprotocol/inspector python server.py
+```
+
+This launches your server, connects to it, and opens a browser UI where you can:
+
+* See the result of the `initialize` handshake and the capabilities your server advertises.
+* List your tools and their schemas.
+* Call a tool with arguments and inspect the response.
+* Watch the raw JSON-RPC messages going back and forth, which is invaluable when learning.
+
+Once the Inspector shows your server working as expected, the next step is to connect it to an actual host so that an LLM can drive it. That is covered in the next section.
