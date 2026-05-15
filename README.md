@@ -4,7 +4,7 @@ This repository is for learning about the Model Context Protocol (MCP). MCP is a
 
 * [What problem MCP is designed to solve and why it exists.](#what-problem-does-mcp-solve)
 * [The architecture of MCP (clients, servers, transports, and message formats).](#the-architecture-of-mcp)
-* How MCP compares to other approaches for tool use and function calling.
+* [How MCP compares to other approaches for tool use and function calling.](#how-mcp-compares-to-other-approaches)
 * How to build and run an MCP server.
 * How to connect an MCP server to an LLM client (e.g. Claude Desktop, Claude Code).
 * Practical examples of using MCP to expose tools, resources, and prompts.
@@ -68,5 +68,47 @@ A connection follows a defined lifecycle:
 3. **Shutdown.** Either side can close the connection cleanly when it is no longer needed.
 
 Putting it all together: a host runs one or more clients, each client speaks JSON-RPC 2.0 over a transport (stdio or HTTP) to a server, and the server exposes tools, resources, and prompts that the host can surface to the LLM and the user.
+
+## How MCP compares to other approaches
+
+Giving an LLM access to tools and data is not a new idea. Several approaches existed before MCP and continue to coexist with it. Understanding where MCP sits in this landscape helps clarify what it does and does not replace.
+
+### Native function calling / tool use in the model API
+
+All the major LLM providers (Anthropic, OpenAI, Google, and others) expose some form of function calling or tool use directly in their API. The application sends the model a list of available tools, each described by a name, a description, and a JSON Schema for its parameters. The model responds with a structured request to call one of those tools, the application runs the corresponding code, and the result is fed back into the conversation.
+
+This works well, but it is a per-application contract. Each app defines its own tools, writes its own dispatch logic, and is responsible for things like authentication, error handling, and streaming. If two different applications want to expose the same capability (say, "search Jira issues"), they each have to implement it from scratch.
+
+MCP does not replace this mechanism; it sits one layer above it. The host application still uses the model's native tool use to let the LLM actually invoke a tool. The difference is where the tool definitions and implementations come from: with MCP, they come from an external server that any compliant host can connect to, rather than being hand-coded inside each host.
+
+### Vendor-specific plugin systems
+
+Some vendors have shipped their own plugin or extension systems, for example OpenAI's ChatGPT Plugins (built on top of OpenAPI specs) and "Custom GPTs" with Actions. These let third parties expose capabilities to a specific product.
+
+The limitations are that they are tied to a single vendor and a single product surface. A plugin written for ChatGPT cannot be used by Claude, by a local editor, or by a custom internal application without being rewritten. MCP, by contrast, is an open protocol with no single owner of the client side, so the same server can be reused across many hosts.
+
+### Agent frameworks and tool libraries
+
+Libraries such as LangChain, LlamaIndex, Haystack, and various agent frameworks provide pre-built "tools" or "connectors" for common systems (databases, search engines, web APIs, file stores). These are very useful, but they operate at the SDK level: the integration code runs inside the host process, and is specific to the framework's abstractions and to the programming language it is written in.
+
+MCP is at the protocol level instead of the library level. Because the server runs as a separate process and communicates over JSON-RPC, it can be implemented in any language and consumed by any client, regardless of what language or framework the host is written in. You can write an MCP server in Python and use it from a TypeScript host, or vice versa, without sharing any code.
+
+### Hand-rolled REST or RPC integrations
+
+The most general approach is also the oldest: the host application calls external systems directly via REST, gRPC, GraphQL, database drivers, and so on, and exposes whichever pieces it wants to the LLM as tools. This is maximally flexible but maximally expensive in engineering effort, and the resulting integrations are not portable to other hosts.
+
+MCP can be thought of as a shared convention that absorbs the repetitive parts of these hand-rolled integrations (capability discovery, schema declaration, lifecycle, streaming, errors) while still letting the server do whatever it needs to behind the scenes.
+
+### Summary
+
+| Approach | Where the integration lives | Reusable across hosts? | Standardised? |
+| --- | --- | --- | --- |
+| Native function calling | Inside each host application | No | Per-vendor API |
+| Vendor plugin systems | Tied to a specific product | No | Vendor-specific |
+| Agent frameworks / tool libraries | Inside the host, as library code | Only within the same framework/language | Library-level |
+| Hand-rolled REST/RPC | Inside the host, fully custom | No | None |
+| **MCP** | In a separate server process | **Yes**, across any MCP-aware host | **Yes**, open protocol |
+
+The short version: MCP does not compete with the model's tool-use API; it standardises and externalises the layer where tools and data sources are defined, so that the same integration can be reused everywhere instead of being rebuilt in every application.
 
 A useful analogy is the Language Server Protocol (LSP). Before LSP, every code editor implemented its own integration for every programming language, leading to massive duplication of effort. LSP standardised the interface between editors and language tooling, so that one language server could serve any LSP-compatible editor. MCP aims to do the same for LLM applications and the tools and data they need to reach.
