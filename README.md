@@ -23,7 +23,7 @@ This repository is for learning about the Model Context Protocol (MCP). MCP is a
 * [How MCP compares to other approaches for tool use and function calling.](#how-mcp-compares-to-other-approaches)
 * [How to build and run an MCP server.](#how-to-build-and-run-an-mcp-server)
 * [How to connect an MCP server to an LLM client (e.g. Claude Desktop, Claude Code).](#how-to-connect-an-mcp-server-to-an-llm-client)
-* Practical examples of using MCP to expose tools, resources, and prompts.
+* [Practical examples of using MCP to expose tools, resources, and prompts.](#practical-examples)
 
 ## What problem does MCP solve?
 
@@ -310,3 +310,120 @@ Claude Code will open a Streamable HTTP connection to that URL rather than launc
 Once a server is connected, no further wiring is required on your end. The host fetches the tool list from the server, presents the tools to the LLM as part of the conversation, and the LLM decides when to call them. If you ask Claude "what was Acme's most recent order?", it will see that `orders-db` exposes `search_customers` and `get_order`, chain them as needed, and weave the results into its reply.
 
 In other words, the connection step is mostly a one-time setup: register the server, confirm it's healthy, and from that point on the model treats its tools as just another capability it can reach for when it needs them.
+
+## Practical examples
+
+So far the architecture section has introduced three primitives that an MCP server can expose: **tools**, **resources**, and **prompts**. This section gives concrete examples of each, first in a general setting and then applied to bioinformatics, which is where I am most interested in using MCP.
+
+### Tools: actions the model can invoke
+
+Tools are functions the LLM can decide to call. They are the most common primitive and are best for actions that take well-defined inputs and produce a well-defined result.
+
+A general example: a Git server might expose tools such as `list_commits(branch, since)`, `show_diff(commit_sha)`, and `search_code(pattern)`.
+
+A bioinformatics example: a server that wraps common sequence and annotation lookups.
+
+```python
+from mcp.server.fastmcp import FastMCP
+
+mcp = FastMCP("bio-tools")
+
+@mcp.tool()
+def fetch_gene_info(symbol: str, species: str = "human") -> dict:
+    """Look up a gene by HGNC symbol and return its Ensembl ID, chromosome,
+    coordinates, biotype, and a short description."""
+    ...
+
+@mcp.tool()
+def blast_protein(sequence: str, database: str = "nr", max_hits: int = 10) -> list[dict]:
+    """Run a protein BLAST search against the given NCBI database
+    and return the top hits with their accession, e-value, and percent identity."""
+    ...
+
+@mcp.tool()
+def lookup_variant(rsid: str) -> dict:
+    """Fetch dbSNP and ClinVar annotations for a given rsID,
+    including allele frequencies and clinical significance where available."""
+    ...
+```
+
+With this server connected, a question like "what is the chromosomal location of TP53 and is rs1042522 a known variant in it?" can be answered by Claude chaining `fetch_gene_info("TP53")` and `lookup_variant("rs1042522")` without you having to invoke them manually.
+
+### Resources: read-only context the host can load
+
+Resources are pieces of read-only data that the server makes available to the host. They are addressed by URI and are typically chosen by the user or the host, not the model. Think of them as files or records that you can drop into the conversation as context.
+
+A general example: a documentation server might expose each page of an internal handbook as a resource with a URI like `handbook://engineering/onboarding`.
+
+A bioinformatics example: a server that exposes the contents of a project directory as resources, so the model can read sample sheets, QC reports, and result tables on demand.
+
+```python
+import json
+from pathlib import Path
+
+PROJECT = Path("/data/rnaseq-project-42")
+
+@mcp.resource("samples://list")
+def list_samples() -> str:
+    """The sample sheet for this RNA-seq project as JSON."""
+    return (PROJECT / "samples.json").read_text()
+
+@mcp.resource("qc://{sample_id}")
+def qc_report(sample_id: str) -> str:
+    """The FastQC summary for a given sample."""
+    return (PROJECT / "qc" / f"{sample_id}_fastqc.txt").read_text()
+
+@mcp.resource("results://de-genes")
+def differential_expression() -> str:
+    """The differential expression results table (TSV) from the latest run."""
+    return (PROJECT / "results" / "de_genes.tsv").read_text()
+```
+
+In Claude Code, you can then pull any of these into the conversation (for example, by `@`-mentioning the resource) and ask things like "summarise the QC report for sample HCC-12 and flag anything unusual" without having to copy and paste the file contents yourself.
+
+### Prompts: reusable templates the user can invoke
+
+Prompts are pre-defined templates that bundle instructions, context, and sometimes arguments into a reusable workflow. They are typically user-controlled: the user picks a prompt from a menu (in Claude Code, via slash-commands or the `/mcp` UI) rather than the LLM choosing it.
+
+A general example: a code-review server might expose a `review-pr` prompt that takes a pull request number and produces a structured review checklist.
+
+A bioinformatics example: standardised analysis prompts that encode lab conventions, so that every team member gets the same starting point.
+
+```python
+@mcp.prompt()
+def annotate_variant(chrom: str, pos: int, ref: str, alt: str) -> str:
+    """Produce a structured clinical-annotation prompt for a single variant."""
+    return f"""You are assisting with variant interpretation. For the variant
+{chrom}:{pos} {ref}>{alt}, do the following, in order:
+
+1. Use the `lookup_variant` tool to fetch population and clinical annotations.
+2. Use `fetch_gene_info` for any gene the variant overlaps.
+3. Summarise allele frequency, predicted impact, and ClinVar significance.
+4. Suggest whether further follow-up (e.g. functional study, segregation analysis)
+   is warranted, and justify briefly.
+
+Be explicit about uncertainty. Do not invent annotations that the tools did not return."""
+
+@mcp.prompt()
+def design_primers(target_region: str, product_size: str = "100-200") -> str:
+    """Produce a primer-design prompt following the lab's standard parameters."""
+    return f"""Design PCR primers for the region {target_region}.
+Target product size: {product_size} bp.
+Constraints: Tm 58 to 62 C, GC content 40 to 60 percent,
+avoid runs of 4+ identical bases, check for SNPs at primer binding sites
+using the `lookup_variant` tool where possible.
+Return the forward and reverse primer sequences, their Tm and GC content,
+and a short justification for the chosen positions."""
+```
+
+The user invokes one of these prompts, fills in the arguments, and the LLM proceeds with a consistent, lab-approved workflow rather than improvising from scratch each time.
+
+### Putting it together
+
+A useful mental model for a real bioinformatics MCP server is to combine all three primitives:
+
+* **Tools** wrap your existing analysis functions and external databases (BLAST, Ensembl, dbSNP, ClinVar, internal LIMS, pipeline runners).
+* **Resources** expose the relevant pieces of an analysis project (sample sheets, QC reports, results tables, plots) so the model can read them on demand.
+* **Prompts** encode standard operating procedures (variant annotation, primer design, differential expression summary) so that analyses are reproducible across team members.
+
+Connected to a host like Claude Code, this turns a lab's accumulated scripts, files, and conventions into something an LLM can drive directly. Instead of asking a teammate to run a script and paste the result, you can ask Claude: "annotate this list of variants using our standard workflow, then summarise the high-impact ones and tell me which samples they appear in." The host pulls the right resources, the LLM calls the right tools, and the prompt keeps the analysis aligned with how the lab actually does things.
