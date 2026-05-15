@@ -8,8 +8,8 @@ MCP is a standard way to let an LLM use code you have already written, without b
 2. You wrap them in an **MCP server**, giving each function a name, a plain-English description, and a JSON Schema for its arguments.
 3. An MCP-aware **host** (such as Claude Desktop or Claude Code) connects to your server and asks "what tools do you offer?".
 4. The host passes those tool descriptions to the LLM as part of the conversation.
-5. When the user asks a question (e.g. "how many orders did Acme place last month?"), the LLM decides which tool to call and emits a structured tool call.
-6. The host forwards that call to your server over JSON-RPC. **Your server runs the actual function** against the database and returns the result.
+5. When the user asks a question (e.g. "how many orders did Acme place last month?"), the LLM decides which tool to call and what arguments to pass.
+6. The host forwards that call to your server as a structured JSON message. **Your server runs the actual function** against the database and returns the result.
 7. The host feeds the result back to the LLM, which uses it to answer the user.
 
 The LLM never executes your code; it only decides *which* function to call and *with what arguments*. The server does the work. That is why the server can be written in any language: the only contract between host and server is JSON messages on a pipe or a socket. And because the protocol is standardised, the same server can be reused by any MCP-aware client without rewriting the integration.
@@ -31,7 +31,7 @@ LLMs on their own are powerful reasoners, but they are isolated. By default a mo
 
 Before MCP, every team that wanted to give an LLM access to tools and data had to build that bridge themselves. A code editor that wanted the model to read a repository, a chat client that wanted to query a ticketing system, and an internal app that wanted to call a SQL warehouse each built bespoke integrations. Even when two applications wanted to connect to the same backend (say, GitHub or Postgres), they typically wrote their own glue code with their own conventions for authentication, tool descriptions, error handling, and streaming.
 
-This produces an "N times M" problem: N AI applications times M data sources or tools equals N by M integrations, most of which are reinventing the same wheel. It also makes integrations brittle, since a tool built for one client often cannot be reused by another.
+This produces what is sometimes called an "N-by-M" problem: with N AI applications and M data sources or tools, you end up with roughly N times M integrations, most of which are reinventing the same wheel. It also makes integrations brittle, since a tool built for one client often cannot be reused by another.
 
 The Model Context Protocol, introduced by Anthropic in late 2024, is an open standard that addresses this by defining a common protocol for how AI applications connect to external context and capabilities. The goals are:
 
@@ -214,7 +214,7 @@ Same shape, same primitives, just expressed in the host language's idioms.
 
 For local development, the stdio transport is the default. The server is launched as a subprocess by whatever host you connect, so you typically do not run it directly yourself. The host is configured with a command line like `python server.py` or `node server.js`, and it manages the process lifecycle.
 
-If you want to run a server over the network (for example, a shared internal MCP server), you switch the transport to Streamable HTTP. With the Python SDK, that looks roughly like `mcp.run(transport="streamable-http", port=8080)`.
+If you want to run a server over the network (for example, a shared internal MCP server), you switch the transport to Streamable HTTP. With the Python SDK, that means setting the host and port on the `FastMCP` instance (for example, `FastMCP("orders-db", host="0.0.0.0", port=8080)`) and then calling `mcp.run(transport="streamable-http")` instead of the default. In this mode the server runs as a long-lived process that you start yourself, rather than as a subprocess of the host.
 
 ### Testing your server
 
@@ -358,7 +358,6 @@ A general example: a documentation server might expose each page of an internal 
 A bioinformatics example: a server that exposes the contents of a project directory as resources, so the model can read sample sheets, QC reports, and result tables on demand.
 
 ```python
-import json
 from pathlib import Path
 
 PROJECT = Path("/data/rnaseq-project-42")
