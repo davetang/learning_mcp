@@ -1,5 +1,21 @@
 # Model Context Protocol
 
+## TL;DR
+
+MCP is a standard way to let an LLM use code you have already written, without baking that code into any particular LLM application. A concrete example: you have a database and some functions that query it.
+
+1. You write your query functions in whatever language you like (Python, Go, TypeScript, etc.).
+2. You wrap them in an **MCP server**, giving each function a name, a plain-English description, and a JSON Schema for its arguments.
+3. An MCP-aware **host** (such as Claude Desktop or Claude Code) connects to your server and asks "what tools do you offer?".
+4. The host passes those tool descriptions to the LLM as part of the conversation.
+5. When the user asks a question (e.g. "how many orders did Acme place last month?"), the LLM decides which tool to call and emits a structured tool call.
+6. The host forwards that call to your server over JSON-RPC. **Your server runs the actual function** against the database and returns the result.
+7. The host feeds the result back to the LLM, which uses it to answer the user.
+
+The LLM never executes your code; it only decides *which* function to call and *with what arguments*. The server does the work. That is why the server can be written in any language: the only contract between host and server is JSON messages on a pipe or a socket. And because the protocol is standardised, the same server can be reused by any MCP-aware client without rewriting the integration.
+
+## Purpose
+
 This repository is for learning about the Model Context Protocol (MCP). MCP is a protocol that enables a Large Language Model (LLM) to interact with external tools and data sources (such as databases, APIs, and file systems). Some things I am interested in:
 
 * [What problem MCP is designed to solve and why it exists.](#what-problem-does-mcp-solve)
