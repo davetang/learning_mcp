@@ -27,6 +27,7 @@ This repository is for learning about the Model Context Protocol (MCP). MCP is a
 * [Security and trust model.](#security-and-trust-model)
 * [Authorization for remote servers.](#authorization-for-remote-servers)
 * [Practical examples of using MCP to expose tools, resources, and prompts.](#practical-examples)
+* [A runnable demo in Python.](#a-runnable-demo)
 * [References and further reading.](#references-and-further-reading)
 
 ## What problem does MCP solve?
@@ -209,6 +210,8 @@ Install it:
 ```bash
 pip install mcp
 ```
+
+Note that version 2 of the Python SDK (2026) renamed `FastMCP` to `MCPServer` (imported from `mcp.server.mcpserver`). The snippets below use the version 1 name; the [demo](demo/) in this repository uses the version 2 API.
 
 A minimal server that exposes two database query functions might look like this:
 
@@ -537,6 +540,17 @@ A useful mental model for a real bioinformatics MCP server is to combine all thr
 * **Prompts** encode standard operating procedures (variant annotation, primer design, differential expression summary) so that analyses are reproducible across team members.
 
 Connected to a host like Claude Code, this turns a lab's accumulated scripts, files, and conventions into something an LLM can drive directly. Instead of asking a teammate to run a script and paste the result, you can ask Claude: "annotate this list of variants using our standard workflow, then summarise the high-impact ones and tell me which samples they appear in." The host pulls the right resources, the LLM calls the right tools, and the prompt keeps the analysis aligned with how the lab actually does things.
+
+## A runnable demo
+
+The [`demo/`](demo/) directory contains a small, self-contained Python example of everything above:
+
+* `server.py` exposes three tools (`gc_content`, `reverse_complement`, `lookup_gene`), two resources (`genes://all` and the template `genes://{symbol}`) and one prompt (`gene_report`).
+* `explore.py` connects with the official client SDK and exercises every primitive, with no LLM involved.
+* `raw.py` drives the same server with hand-written JSON-RPC over stdin and stdout, to show there is nothing hidden.
+* `chat.py` is a minimal host: a local model served by [Ollama](https://ollama.com) that can call the tools, with slash commands for resources and prompts.
+
+See [`demo/README.md`](demo/README.md) for setup and a walkthrough, including how to add the same server to Claude Code.
 
 ## References and further reading
 
