@@ -4,7 +4,7 @@ A small, self-contained demonstration of the Model Context Protocol in Python. I
 
 | File | What it is |
 | --- | --- |
-| `server.py` | An MCP server with three tools, two resources and one prompt. All in-memory, no network. |
+| `server.py` | An MCP server with three tools, two resources and one prompt. All in-memory. Runs over stdio, or as an HTTP service with `--http`. |
 | `explore.py` | A client built on the official SDK that calls every primitive. No LLM involved. |
 | `raw.py` | The same protocol with hand-written JSON-RPC over stdin/stdout. No SDK on the client side. |
 | `chat.py` | A minimal host: an Ollama model that can call the server's tools, plus slash commands for resources and prompts. |
@@ -122,7 +122,14 @@ The first version of this script hung for over fifteen minutes at full GPU load 
 
 ### How `chat.py` works
 
-It is the smallest possible MCP host, and every real host does the same four things:
+In MCP's vocabulary `chat.py` is a **host**: the application the user talks to. Inside it, the `Client` object is the **client**, the component that owns one connection to one server. Claude Code and Claude Desktop are hosts in exactly the same sense, each running one client per configured server. Ollama is none of these. It runs the model and knows nothing about MCP, which is why a host has to sit between the two:
+
+```
+  server.py  <--JSON-RPC over stdio or HTTP-->  chat.py  <--HTTP-->  Ollama
+  (MCP server)                                (MCP host)            (runs qwen3)
+```
+
+Every real host does the same four things:
 
 1. Launch the server and fetch its tool list (`list_tools`).
 2. Convert each MCP tool into the schema the LLM API expects. For Ollama (and OpenAI-compatible APIs) that is `{"type": "function", "function": {"name", "description", "parameters"}}`, where `parameters` is the tool's `input_schema` passed through unchanged.
@@ -133,7 +140,46 @@ The model call is streamed so that partial output is visible, and the assistant 
 
 The LLM never runs any code. It only chooses a tool name and arguments; the server does the work.
 
-## Step 4: the same server from Claude Code
+## Step 4: the other transport, run it as a service
+
+Everything above used the **stdio** transport, where the client launches the server as its own private subprocess. The same server also speaks **Streamable HTTP**, where it is a long-lived service that clients reach by URL. This is the shape most people picture when they hear "server".
+
+Start it in one terminal:
+
+```bash
+python server.py --http                          # http://127.0.0.1:8000/mcp
+python server.py --http --port 8123              # a different port
+```
+
+Point any client at the URL from another:
+
+```bash
+python explore.py http://127.0.0.1:8000/mcp
+MCP_URL=http://127.0.0.1:8000/mcp python chat.py "reverse complement of GATTACA?"
+```
+
+The output is identical to the stdio runs, because only the transport changed. In `explore.py` the sole difference is what gets handed to the client constructor: a `StdioServerParameters` describing how to launch a process, or a URL string. Every request after that is the same. In `server.py` only the last three lines differ; the tools, resources and prompt know nothing about the transport.
+
+The two shapes behave differently in ways worth knowing:
+
+| | stdio | Streamable HTTP |
+| --- | --- | --- |
+| Who starts the server | the client, automatically | you, ahead of time |
+| Lifetime | dies with the client | runs until you stop it |
+| Concurrent clients | one private copy each | many, sharing one process |
+| Location | same machine only | any machine on the network |
+| Authentication | none needed, runs as you | needed, OAuth 2.1 in the spec |
+
+You can watch that difference. Running two clients against one HTTP server, both are served by the single process you started. Running two clients over stdio instead, each gets a private copy that exits when its client does:
+
+```
+2 stdio clients connected -> 2 private server.py copies: ['687', '689']
+after both clients exit    -> 0 stdio copies left
+```
+
+A word of caution on `--http`. The server binds to `127.0.0.1` by default, so only your machine can reach it. There is no authentication in this demo, so anything that can reach the port can call the tools. Do not bind it to a public address, and see the [authorization section](../README.md#authorization-for-remote-servers) of the main README for what a real remote server needs.
+
+## Step 5: the same server from Claude Code
 
 Because the server speaks the standard protocol, any MCP host can use it. To add it to Claude Code, point it at the virtual environment's Python so that the `mcp` package is importable:
 
@@ -143,7 +189,7 @@ claude mcp add bio-demo -- /full/path/to/demo/.venv/bin/python /full/path/to/dem
 
 Then start Claude Code, run `/mcp` to confirm `bio-demo` is connected, and ask something like "what is the reverse complement of GATTACA?".
 
-## Step 5: poke at it with the MCP Inspector
+## Step 6: poke at it with the MCP Inspector
 
 ```bash
 npx @modelcontextprotocol/inspector .venv/bin/python server.py

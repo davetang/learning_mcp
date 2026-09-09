@@ -1,8 +1,14 @@
 #!/usr/bin/env python3
 """Exercise every primitive of server.py through the MCP client SDK, no LLM needed.
 
-The client launches server.py as a subprocess and talks to it over stdio,
-exactly as Claude Code or Claude Desktop would.
+    python explore.py                              launch server.py as a subprocess
+                                                   and talk to it over stdio
+    python explore.py http://127.0.0.1:8000/mcp    connect to an already-running
+                                                   server started with --http
+
+The only difference is what gets passed to Client(): a StdioServerParameters
+that says how to launch a process, or a URL string. Everything after that,
+including every request below, is identical.
 """
 
 import asyncio
@@ -29,8 +35,14 @@ def show_tool_result(result) -> None:
 
 
 async def main() -> None:
-    params = StdioServerParameters(command=sys.executable, args=[str(SERVER)])
-    async with Client(params) as client:
+    if len(sys.argv) > 1:  # a URL: connect to a server someone else is running
+        target = sys.argv[1]
+    else:  # no URL: launch server.py ourselves and talk over its stdin/stdout
+        target = StdioServerParameters(command=sys.executable, args=[str(SERVER)])
+
+    async with Client(target) as client:
+        print(f"connected via {'Streamable HTTP' if isinstance(target, str) else 'stdio'}")
+
         heading("handshake")
         print("server:      ", client.server_info)
         print("protocol:    ", client.protocol_version)

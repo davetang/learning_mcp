@@ -6,11 +6,23 @@
 * Prompts: reusable templates the user can invoke.
 
 Everything is in-memory so the demo has no external dependencies.
-Run it directly (it will wait for JSON-RPC on stdin) or, more usefully,
-let a client launch it: see explore.py, raw.py and chat.py.
+
+Two ways to run it, with identical tools either way:
+
+    python server.py            stdio: waits for JSON-RPC on stdin, so a host
+                                launches it as a subprocess (see explore.py,
+                                raw.py and chat.py)
+    python server.py --http     Streamable HTTP: a long-lived service on
+                                http://127.0.0.1:8000/mcp that many clients
+                                can connect to at once
+
+Only the last three lines of this file differ between the two. The tools,
+resources and prompt below know nothing about the transport.
 """
 
+import argparse
 import json
+import sys
 
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ResourceError, ToolError
@@ -132,4 +144,17 @@ def gene_report(symbol: str) -> str:
 
 
 if __name__ == "__main__":
-    server.run()  # stdio transport by default
+    parser = argparse.ArgumentParser(description="Run the bio-demo MCP server.")
+    parser.add_argument("--http", action="store_true",
+                        help="serve over Streamable HTTP instead of stdio")
+    parser.add_argument("--host", default="127.0.0.1",
+                        help="address to bind in --http mode (default: 127.0.0.1)")
+    parser.add_argument("--port", type=int, default=8000,
+                        help="port to bind in --http mode (default: 8000)")
+    args = parser.parse_args()
+
+    if args.http:
+        print(f"bio-demo listening on http://{args.host}:{args.port}/mcp", file=sys.stderr)
+        server.run(transport="streamable-http", host=args.host, port=args.port)
+    else:
+        server.run()  # stdio: the default, and what a host launches as a subprocess

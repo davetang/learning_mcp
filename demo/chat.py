@@ -6,6 +6,9 @@ Usage:
     python chat.py "GC content of ACGTGC?"  # one question, then exit
 
 Environment:
+    MCP_URL             connect to an already-running server over Streamable HTTP
+                        (e.g. http://127.0.0.1:8000/mcp) instead of launching
+                        server.py as a subprocess over stdio
     OLLAMA_MODEL        model to use (default: qwen3); it must support tool calling
     OLLAMA_HOST         where Ollama is listening (default: http://localhost:11434)
     OLLAMA_THINK=1      let a thinking-capable model (qwen3, gpt-oss) reason before answering;
@@ -32,6 +35,7 @@ import ollama
 from mcp import Client, StdioServerParameters
 
 SERVER = Path(__file__).with_name("server.py")
+MCP_URL = os.environ.get("MCP_URL")
 MODEL = os.environ.get("OLLAMA_MODEL", "qwen3")
 THINK = os.environ.get("OLLAMA_THINK", "0") == "1"
 NUM_PREDICT = int(os.environ.get("OLLAMA_NUM_PREDICT", "2048"))
@@ -165,15 +169,17 @@ async def check_model(llm: ollama.AsyncClient):
 
 
 async def main() -> None:
-    params = StdioServerParameters(command=sys.executable, args=[str(SERVER)])
+    # A URL connects to a running server; otherwise we launch one over stdio.
+    target = MCP_URL or StdioServerParameters(command=sys.executable, args=[str(SERVER)])
     llm = ollama.AsyncClient()
     think = await check_model(llm)
-    async with Client(params) as mcp:
+    async with Client(target) as mcp:
         tools = to_ollama_tools((await mcp.list_tools()).tools)
         messages: list = []
         if mcp.instructions:  # the server's own guidance becomes the system prompt
             messages.append({"role": "system", "content": mcp.instructions})
-        print(f"connected to {mcp.server_info.name}, model {MODEL}"
+        print(f"connected to {mcp.server_info.name} over "
+              f"{'Streamable HTTP' if MCP_URL else 'stdio'}, model {MODEL}"
               f"{' (thinking on)' if think else ''}, tools: "
               + ", ".join(t["function"]["name"] for t in tools))
 

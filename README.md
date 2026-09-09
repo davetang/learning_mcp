@@ -550,6 +550,8 @@ The [`demo/`](demo/) directory contains a small, self-contained Python example o
 * `raw.py` drives the same server with hand-written JSON-RPC over stdin and stdout, to show there is nothing hidden.
 * `chat.py` is a minimal host: a local model served by [Ollama](https://ollama.com) that can call the tools, with slash commands for resources and prompts.
 
+The same server runs over either transport. `python server.py` waits on stdin for a host to launch it as a subprocess, while `python server.py --http` runs it as a long-lived service that clients reach at a URL. Only the last three lines of the file differ between the two.
+
 See [`demo/README.md`](demo/README.md) for setup and a walkthrough, including how to add the same server to Claude Code.
 
 ## References and further reading
