@@ -69,7 +69,7 @@ ollama pull qwen3
 python chat.py "What is the GC content of ACGTGGCCTTAA, and what is its reverse complement?"
 ```
 
-The script prints each tool call the model makes and the result the server returns, then the model's final answer:
+The script prints each tool call the model makes and the result the server returns, then streams the model's final answer:
 
 ```
 connected to bio-demo, model qwen3, tools: gc_content, reverse_complement, lookup_gene
@@ -81,9 +81,12 @@ connected to bio-demo, model qwen3, tools: gc_content, reverse_complement, looku
 }
   -> reverse_complement({"sequence": "ACGTGGCCTTAA"})
   <- TTAAGGCCACGT
+The GC content of the sequence **ACGTGGCCTTAA** is 50% (6 out of 12 bases are G or C).
 
-The sequence is 12 bp with a GC content of 50%, and its reverse complement is TTAAGGCCACGT.
+The reverse complement of the sequence is **TTAAGGCCACGT**.
 ```
+
+The whole run takes a few seconds once the model is loaded. The model never computed anything itself: it chose the two tools and their arguments, the server ran them, and the model wrote the answer from the results.
 
 Run it without arguments for an interactive session. Plain text is sent to the model; slash commands exercise the primitives that are not model-controlled:
 
@@ -96,12 +99,26 @@ Run it without arguments for an interactive session. Plain text is sent to the m
 /quit
 ```
 
-Two environment variables control the connection:
+Four environment variables control the model:
 
 ```bash
-OLLAMA_MODEL=llama3.1 python chat.py        # a different model
+OLLAMA_MODEL=llama3.1 python chat.py             # a different model (must support tool calling)
 OLLAMA_HOST=http://gpubox:11434 python chat.py   # Ollama on another machine
+OLLAMA_THINK=1 python chat.py                    # let qwen3 / gpt-oss "think" before answering
+OLLAMA_NUM_PREDICT=512 python chat.py            # tighter cap on tokens per model call
 ```
+
+### If it looks stuck
+
+Every tool call is printed as it happens, so if the last thing on screen is a tool result, the process is waiting for Ollama to generate the next reply. The script streams the model's output token by token, so a healthy model shows text within a few seconds (longer the first time, while the model loads). Ctrl-C stops the script, and Ollama abandons the generation when the connection closes.
+
+The first version of this script hung for over fifteen minutes at full GPU load after the second tool call. The cause was Ollama's "thinking" mode, which is on by default for `qwen3`: after receiving tool results the model produced an open-ended reasoning trace, and nothing capped it. The script now guards against this in three ways:
+
+* **Thinking is off by default.** Set `OLLAMA_THINK=1` to turn it on; the trace is then streamed to the screen so you can watch what the model is doing.
+* **Generation is capped.** Ollama's default is unlimited. Each model call is limited to `OLLAMA_NUM_PREDICT` tokens (2048 by default) and a note is printed if the cap is hit.
+* **Capabilities are checked on startup.** The script asks Ollama what the model supports, refuses models that cannot call tools (they would answer without ever using the server), and only passes the thinking flag to models that understand it.
+
+`ollama ps` shows which model is loaded and whether it is running on the GPU or the CPU.
 
 ### How `chat.py` works
 
@@ -111,6 +128,8 @@ It is the smallest possible MCP host, and every real host does the same four thi
 2. Convert each MCP tool into the schema the LLM API expects. For Ollama (and OpenAI-compatible APIs) that is `{"type": "function", "function": {"name", "description", "parameters"}}`, where `parameters` is the tool's `input_schema` passed through unchanged.
 3. Send the conversation to the model with those tools attached.
 4. If the reply contains tool calls, forward each to the server with `call_tool`, append the results as `tool` messages, and go back to step 3. When the reply is plain text, show it.
+
+The model call is streamed so that partial output is visible, and the assistant message (including its tool calls) is appended to the conversation before the tool results, which is the order the model expects to see.
 
 The LLM never runs any code. It only chooses a tool name and arguments; the server does the work.
 
